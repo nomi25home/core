@@ -28,6 +28,23 @@ class OpenMeteoFlowHandler(ConfigFlow, domain=DOMAIN):
     VERSION = 1
     MINOR_VERSION = 2
 
+    async def _async_validate_zone(
+        self, zone_entity_id: str
+    ) -> tuple[dict[str, str], str | None]:
+        """Validate the zone exists and Open-Meteo is reachable; return (errors, zone_name)."""
+        if (zone := self.hass.states.get(zone_entity_id)) is None:
+            return {CONF_ZONE: "zone_not_found"}, None
+        open_meteo = OpenMeteo(session=async_get_clientsession(self.hass))
+        try:
+            await open_meteo.forecast(
+                latitude=zone.attributes[EntityStateAttribute.LATITUDE],
+                longitude=zone.attributes[EntityStateAttribute.LONGITUDE],
+                current=[HourlyParameters.TEMPERATURE_2M],
+            )
+        except OpenMeteoError:
+            return {"base": "cannot_connect"}, None
+        return {}, zone.name
+
     @override
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -36,24 +53,12 @@ class OpenMeteoFlowHandler(ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
         if user_input is not None:
             self._async_abort_entries_match({CONF_ZONE: user_input[CONF_ZONE]})
-
-            if (zone := self.hass.states.get(user_input[CONF_ZONE])) is None:
-                errors[CONF_ZONE] = "zone_not_found"
-            else:
-                open_meteo = OpenMeteo(session=async_get_clientsession(self.hass))
-                try:
-                    await open_meteo.forecast(
-                        latitude=zone.attributes[EntityStateAttribute.LATITUDE],
-                        longitude=zone.attributes[EntityStateAttribute.LONGITUDE],
-                        current=[HourlyParameters.TEMPERATURE_2M],
-                    )
-                except OpenMeteoError:
-                    errors["base"] = "cannot_connect"
-                else:
-                    return self.async_create_entry(
-                        title=zone.name,
-                        data={CONF_ZONE: user_input[CONF_ZONE]},
-                    )
+            errors, zone_name = await self._async_validate_zone(user_input[CONF_ZONE])
+            if not errors:
+                return self.async_create_entry(
+                    title=zone_name,
+                    data={CONF_ZONE: user_input[CONF_ZONE]},
+                )
 
         return self.async_show_form(
             step_id="user",
@@ -68,25 +73,13 @@ class OpenMeteoFlowHandler(ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
         if user_input is not None:
             self._async_abort_entries_match({CONF_ZONE: user_input[CONF_ZONE]})
-
-            if (zone := self.hass.states.get(user_input[CONF_ZONE])) is None:
-                errors[CONF_ZONE] = "zone_not_found"
-            else:
-                open_meteo = OpenMeteo(session=async_get_clientsession(self.hass))
-                try:
-                    await open_meteo.forecast(
-                        latitude=zone.attributes[EntityStateAttribute.LATITUDE],
-                        longitude=zone.attributes[EntityStateAttribute.LONGITUDE],
-                        current=[HourlyParameters.TEMPERATURE_2M],
-                    )
-                except OpenMeteoError:
-                    errors["base"] = "cannot_connect"
-                else:
-                    return self.async_update_reload_and_abort(
-                        self._get_reconfigure_entry(),
-                        title=zone.name,
-                        data_updates={CONF_ZONE: user_input[CONF_ZONE]},
-                    )
+            errors, zone_name = await self._async_validate_zone(user_input[CONF_ZONE])
+            if not errors:
+                return self.async_update_reload_and_abort(
+                    self._get_reconfigure_entry(),
+                    title=zone_name,
+                    data_updates={CONF_ZONE: user_input[CONF_ZONE]},
+                )
 
         entry = self._get_reconfigure_entry()
         return self.async_show_form(
